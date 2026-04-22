@@ -41,12 +41,17 @@ jobs:
           EOF
           yes "" | make oldconfig
 
-      - name: Build BusyBox with Emscripten
+      - name: Build BusyBox with Emscripten (fixed)
         working-directory: ./busybox-src
         run: |
+          export CC=emcc
+          export CXX=em++
+          export AR=emar
+          export RANLIB=emranlib
+          export LD=emcc
           emmake make -j"$(nproc)" busybox \
-            CFLAGS="-O3 -s WASM=1 -s ENVIRONMENT=web -s ALLOW_MEMORY_GROWTH=1" \
-            LDFLAGS="-s MODULARIZE=1 -s EXPORT_NAME=createBusyBox -s ENVIRONMENT=web -s FORCE_FILESYSTEM=1 -s ALLOW_MEMORY_GROWTH=1"
+            CFLAGS="-O3" \
+            LDFLAGS="-s WASM=1 -s MODULARIZE=1 -s EXPORT_NAME=createBusyBox -s ENVIRONMENT=web -s FORCE_FILESYSTEM=1 -s ALLOW_MEMORY_GROWTH=1"
 
       - name: Package browser artifacts
         working-directory: ./busybox-src
