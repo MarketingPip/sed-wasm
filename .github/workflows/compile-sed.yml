@@ -59,11 +59,10 @@ jobs:
         run: |
           mkdir -p ../dist
           
-          # We add editors/sed.o explicitly to ensure the compiler sees the main function
-          # We also add -s INVOKE_RUN=0 to prevent it from trying to run a shell on boot
+          # We use find to catch the correct paths for the archives
+          # and link them. We don't need sed.o specifically if lib.a is present.
           emcc -O3 \
             applets/built-in.o \
-            editors/sed.o \
             editors/lib.a \
             libbb/lib.a \
             -o ../dist/busybox.js \
@@ -72,7 +71,7 @@ jobs:
             -s EXPORT_NAME=createBusyBox \
             -s ENVIRONMENT=web \
             -s FORCE_FILESYSTEM=1 \
-            -s EXPORTED_FUNCTIONS='["_main"]' \
+            -s EXPORTED_FUNCTIONS='["_main", "_malloc", "_free"]' \
             -s EXIT_RUNTIME=1 \
             -s INVOKE_RUN=0 \
             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
