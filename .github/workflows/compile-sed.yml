@@ -11,74 +11,47 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
           version: latest
-
-      - name: Install build dependencies
-        run: sudo apt-get install -y libncurses-dev
-
       - name: Download BusyBox
         run: |
           wget https://busybox.net/downloads/busybox-1.36.1.tar.bz2
           tar -xjf busybox-1.36.1.tar.bz2
           mv busybox-1.36.1 busybox-src
-
-      - name: Configure BusyBox
+      - name: Configure BusyBox (Minimal Sed)
         working-directory: ./busybox-src
         run: |
           make allnoconfig
-
-          # No leading whitespace — kconfig silently ignores indented lines
           cat >> .config << 'EOF'
           CONFIG_SED=y
           CONFIG_LFS=n
-          CONFIG_STATIC=y
-          CONFIG_FEATURE_SHOW_USAGE=n
-          CONFIG_ASH=n
           CONFIG_HUSH=n
+          CONFIG_ASH=n
           CONFIG_SH_IS_NONE=y
+          CONFIG_FEATURE_SH_REPLY=n
+          CONFIG_FEATURE_SHOW_USAGE=n
+          CONFIG_STATIC=y
           EOF
 
-          # Fix off_t assertion — Emscripten off_t never equals uoff_t in 32-bit WASM
-          sed -i \
-            's/char BUG_off_t_size_is_misdetected\[sizeof(off_t) == sizeof(uoff_t) ? 1 : -1\]/char BUG_off_t_size_is_misdetected[1]/' \
-            include/libbb.h
+          # Patch headers to avoid size misdetection errors
+          sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
 
-          # Run oldconfig to generate include/applet_tables.h
-          make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null
+          make oldconfig
 
-          # Patch the *generated* applet table to strip any shell entry points.
-          # applets.h is just a template; the real table is applet_tables.h.
-          # This prevents the linker pulling in ash_main / hush_main.
+          # CRITICAL: patch the *generated* applet table AFTER oldconfig produces it.
+          # Patching applets.h (the template) has no effect — this is the real symbol table.
           sed -i '/ash_main\|hush_main\|sh_main/d' include/applet_tables.h || true
 
-      - name: Patch missing WASM syscalls
-        working-directory: ./busybox-src
-        run: |
-          # sigsuspend does not exist in Emscripten — stub it out before compilation
-          python3 - << 'EOF'
-          import pathlib
-          p = pathlib.Path("libbb/signals.c")
-          stub = "/* WASM stub */\n#include <unistd.h>\n#define sigsuspend(mask) (pause(), 0)\n"
-          p.write_text(stub + p.read_text())
-          EOF
-
-      - name: Compile objects
+      - name: Compile Objects
         working-directory: ./busybox-src
         run: |
           emmake make -j$(nproc) \
             CC=emcc \
-            AR=emar \
-            RANLIB=emranlib \
-            CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32 -Wno-error" \
+            CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
             SKIP_STRIP=y || true
-          # || true because the final native link always fails under emmake;
-          # we only need the .o/.a archives that have been built by this point
-
-      - name: Link to WebAssembly
+      - name: Manual Force-Link
         working-directory: ./busybox-src
         run: |
           mkdir -p ../dist
@@ -91,16 +64,14 @@ jobs:
             -s MODULARIZE=1 \
             -s EXPORT_NAME=createBusyBox \
             -s ENVIRONMENT=web \
-            -s FORCE_FILESYSTEM=1 \
-            -s EXPORTED_RUNTIME_METHODS='["FS","callMain"]' \
-            -s EXPORTED_FUNCTIONS='["_main","_malloc","_free"]' \
+            -s FILESYSTEM=1 \
+            -s EXPORTED_RUNTIME_METHODS='["FS", "callMain"]' \
+            -s EXPORTED_FUNCTIONS='["_main", "_malloc", "_free"]' \
             -s EXIT_RUNTIME=0 \
             -s INVOKE_RUN=0 \
             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
             -s INITIAL_MEMORY=33554432 \
-            -s ALLOW_MEMORY_GROWTH=1 \
-            --no-entry
-
+            -s ALLOW_MEMORY_GROWTH=1
       - name: Commit and Push
         run: |
           git config user.name "github-actions[bot]"
@@ -109,6 +80,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes."
           else
-            git commit -m "chore: update busybox-sed wasm"
+            git commit -m "chore: update compiled busybox-sed wasm (fix ash_main and FS errors)"
             git push
           fi
