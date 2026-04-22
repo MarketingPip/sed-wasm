@@ -28,17 +28,28 @@ jobs:
       - name: Configure BusyBox
         working-directory: ./busybox-src
         run: |
+          # 1. Start with a clean slate
           make allnoconfig
-          # Use BusyBox's own config script for reliability
+          
+          # 2. Ensure scripts/config is executable
+          chmod +x scripts/config
+          
+          # 3. Enable SED and required plumbing
           ./scripts/config --enable CONFIG_SED
           ./scripts/config --enable CONFIG_STATIC
+          
+          # 4. Explicitly disable shells to prevent interactive choice prompts
           ./scripts/config --disable CONFIG_ASH
           ./scripts/config --disable CONFIG_HUSH
+          ./scripts/config --set-val CONFIG_SH_IS_NONE y
+          ./scripts/config --set-val CONFIG_BASH_IS_NONE y
           
-          # Fix for Emscripten's long/off_t checks
-          sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
-          
+          # 5. Apply the changes non-interactively
+          # oldconfig will take our script changes and fill in defaults for the rest
           make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null
+          
+          # 6. Emscripten-specific header fix
+          sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
 
       - name: Compile Objects
         working-directory: ./busybox-src
