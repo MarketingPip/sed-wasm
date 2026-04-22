@@ -28,31 +28,34 @@ jobs:
       - name: Configure BusyBox
         working-directory: ./busybox-src
         run: |
-          # Create a minimal config
+          # 1. Create a base 'all no' config
           make allnoconfig
           
-          # Manually force-set the required variables in the .config file
-          # This bypasses the need for the scripts/config script
-          sed -i 's/.*CONFIG_SED.*/CONFIG_SED=y/' .config
-          sed -i 's/.*CONFIG_STATIC.*/CONFIG_STATIC=y/' .config
+          # 2. Append our requirements to the end of the file
+          # BusyBox will respect the last entry for a variable
+          cat <<EOF >> .config
+          CONFIG_SED=y
+          CONFIG_STATIC=y
+          CONFIG_SH_IS_NONE=y
+          CONFIG_BASH_IS_NONE=y
+          EOF
           
-          # Explicitly set shell choices to 'none' to stop interactive prompts
-          echo "CONFIG_SH_IS_NONE=y" >> .config
-          echo "CONFIG_BASH_IS_NONE=y" >> .config
+          # 3. Non-interactive sync (much faster than 'yes n | make oldconfig')
+          make olddefconfig KCONFIG_NOTIMESTAMP=1
           
-          # Fix for Emscripten-specific header conflict
+          # 4. Fix Emscripten header conflict
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
-          
-          # Use 'yes n' to pipe 'no' to any remaining questions and keep it non-interactive
-          yes n | make oldconfig KCONFIG_NOTIMESTAMP=1
 
       - name: Compile Objects
         working-directory: ./busybox-src
         run: |
+          # We only need the 'editors' and 'libbb' directories for sed
+          # Compiling just these subdirs is significantly faster than a full 'make'
           emmake make -j$(nproc) \
             CC=emcc \
             CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
-            SKIP_STRIP=y || true
+            SKIP_STRIP=y \
+            editors/lib.a libbb/lib.a
 
       - name: Link to WebAssembly
         run: |
