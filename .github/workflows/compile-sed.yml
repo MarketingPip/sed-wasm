@@ -34,23 +34,29 @@ jobs:
           cat >> .config << 'EOF'
           CONFIG_SED=y
           CONFIG_LFS=n
+          CONFIG_HUSH=n
+          CONFIG_ASH=n
+          CONFIG_SH_IS_NONE=y
+          CONFIG_FEATURE_SH_REPLY=n
           CONFIG_FEATURE_SHOW_USAGE=n
           CONFIG_STATIC=y
-          CONFIG_SH_IS_NONE=y
           EOF
           
-          # FORCE-REMOVE ASH REFERENCES:
-          # This prevents the "missing ash_main" error by ensuring the applet 
-          # table doesn't even try to reference a shell.
-          sed -i 's/IF_ASH(APPLET(ash,.*)/\/* ash removed *\//' include/applets.h
+          # CRITICAL FIX: Manually strip ASH references from the applet table 
+          # to prevent the linker from searching for 'ash_main'.
+          sed -i '/APPLET.*ash/d' include/applets.h
+          sed -i '/IF_ASH/d' include/applets.h
           
-          # Patch headers to avoid size checks
+          # Patch headers to avoid size misdetection errors
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
+          
           make oldconfig
 
       - name: Compile Objects
         working-directory: ./busybox-src
         run: |
+          # Generate object archives. '|| true' allows us to proceed to manual linking 
+          # even if the standard Linux-based link step fails.
           emmake make -j$(nproc) \
             CC=emcc \
             CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
@@ -61,7 +67,10 @@ jobs:
         run: |
           mkdir -p ../dist
           
-          # We use -s INVOKE_RUN=0 so it doesn't try to start a default applet on load
+          # FIXES INCLUDED:
+          # 1. -s FILESYSTEM=1 & EXPORTED_RUNTIME_METHODS: enables Module.FS
+          # 2. -s ENVIRONMENT=web: prevents Node.js 'fs' detection errors
+          # 3. -s INVOKE_RUN=0: prevents auto-execution of non-existent shell
           emcc -O3 \
             applets/built-in.o \
             editors/lib.a \
@@ -73,7 +82,7 @@ jobs:
             -s ENVIRONMENT=web \
             -s FILESYSTEM=1 \
             -s EXPORTED_RUNTIME_METHODS='["FS", "callMain"]' \
-            -s EXPORTED_FUNCTIONS='["_main"]' \
+            -s EXPORTED_FUNCTIONS='["_main", "_malloc", "_free"]' \
             -s EXIT_RUNTIME=1 \
             -s INVOKE_RUN=0 \
             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
@@ -84,10 +93,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dist/busybox.js dist/busybox.wasm
+          
+          # Use -f to ensure files are added even if ignored by .gitignore
+          git add -f dist/busybox.js dist/busybox.wasm
+          
           if git diff --staged --quiet; then
             echo "No changes."
           else
-            git commit -m "chore: update compiled busybox-sed wasm (browser-safe)"
+            git commit -m "chore: update compiled busybox-sed wasm (fix ash_main and FS errors)"
             git push
           fi
