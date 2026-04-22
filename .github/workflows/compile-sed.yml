@@ -86,7 +86,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # Remove stale dist so git always sees a diff and commits fresh output
-          git rm -f dist/busybox.js dist/busybox.wasm 2>/dev/null || true
+          git rm --cached -f dist/busybox.js dist/busybox.wasm 2>/dev/null || true
           git add -f dist/busybox.js dist/busybox.wasm
           if git diff --staged --quiet; then
             echo "No changes."
