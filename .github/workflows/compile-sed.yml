@@ -51,8 +51,13 @@ jobs:
       - name: Patch missing WASM syscalls
         working-directory: ./busybox-src
         run: |
-          sed -i '1s|^|/* WASM stub */\n#include <unistd.h>\n#define sigsuspend(mask) (pause(), 0)\n|' \
-            libbb/signals.c
+          # sed '\n' is not portable on Linux — use Python to safely prepend lines
+          python3 - <<'EOF'
+          import pathlib
+          p = pathlib.Path("libbb/signals.c")
+          stub = "/* WASM stub */\n#include <unistd.h>\n#define sigsuspend(mask) (pause(), 0)\n"
+          p.write_text(stub + p.read_text())
+          EOF
 
       - name: Compile Objects
         working-directory: ./busybox-src
