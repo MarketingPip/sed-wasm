@@ -1,4 +1,4 @@
-name: Compile GNU Sed to WebAssembly
+name: Build BusyBox (sed) to WebAssembly
 
 on:
   push:
@@ -8,95 +8,76 @@ permissions:
   contents: write
 
 jobs:
-  build-sed:
+  build-busybox:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
-
-      # Cache Emscripten SDK to avoid reinstall every run
-      - name: Cache Emscripten
-        uses: actions/cache@v4
-        with:
-          path: ~/.emsdk
-          key: emsdk-latest
 
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
           version: latest
-          actions-cache-folder: emsdk-cache
 
-      - name: Download GNU Sed Source
+      - name: Download BusyBox
         run: |
-          wget https://ftp.gnu.org/gnu/sed/sed-4.9.tar.xz
-          tar -xf sed-4.9.tar.xz
-          mv sed-4.9 sed-src
+          wget https://busybox.net/downloads/busybox-1.36.1.tar.bz2
+          tar -xjf busybox-1.36.1.tar.bz2
+          mv busybox-1.36.1 busybox-src
 
-      # Critical: ensure config.guess exists and is modern enough
-      - name: Fix Autotools Host Detection
-        working-directory: ./sed-src
+      - name: Configure BusyBox for WASM
+        working-directory: ./busybox-src
         run: |
-          wget -O config.guess 'https://git.savannah.gnu.org/cgit/config.git/plain/config.guess'
-          chmod +x config.guess
+          # Start with a totally empty config
+          make allnoconfig
+          
+          # Enable only sed and its dependencies
+          cat >> .config << 'EOF'
+          CONFIG_SED=y
+          CONFIG_FEATURE_SHOW_USAGE=n
+          CONFIG_STATIC=y
+          CONFIG_PLATFORM_LINUX=y
+          EOF
+          
+          # Apply the config
+          make oldconfig
 
-      - name: Configure (WASM-safe)
-        working-directory: ./sed-src
+      - name: Build BusyBox with Emscripten
+        working-directory: ./busybox-src
         run: |
-          export CONFIG_SITE=/dev/null
-
-          emconfigure env CONFIG_SITE=/dev/null ./configure \
-            --host=wasm32-unknown-emscripten \
-            --build=$(./config.guess) \
-            --disable-nls \
-            --disable-threads \
-            --disable-shared \
-            --disable-rpath \
-            --cache-file=config.cache \
-            ac_cv_func_nanosleep=yes \
-            ac_cv_func_sleep=yes \
-            ac_cv_func_alarm=no \
-            ac_cv_func_inet_pton=no \
-            ac_cv_prog_cc_c99=yes \
-            gl_cv_func_nanosleep_standard=yes \
-            gl_cv_func_sleep_works=yes
-
-      - name: Build
-        working-directory: ./sed-src
-        run: |
-          emmake make -j1
+          # LDFLAGS handles the linking quirks
+          # SKIP_STRIP=y is required because emcc doesn't support the 'strip' command
+          emmake make -j$(nproc) \
+            CC=emcc \
+            CFLAGS="-D_POSIX_C_SOURCE=200809L" \
+            SKIP_STRIP=y \
+            busybox_unstripped
 
       - name: Link to WebAssembly
-        working-directory: ./sed-src
+        working-directory: ./busybox-src
         run: |
           mkdir -p ../dist
-
-          emcc sed/sed.o \
+          
+          # Link the unstripped object into the JS/Wasm bundle
+          emcc busybox_unstripped \
             -O3 \
             -s WASM=1 \
             -s MODULARIZE=1 \
-            -s EXPORT_NAME=createSed \
-            -s INVOKE_RUN=0 \
+            -s EXPORT_NAME=createBusyBox \
             -s FORCE_FILESYSTEM=1 \
             -s EXPORTED_FUNCTIONS='["_main"]' \
-            -o ../dist/sed.js
+            -s EXIT_RUNTIME=1 \
+            -o ../dist/busybox.js
 
-      - name: Verify Output
-        run: |
-          ls -lah dist
-
-      - name: Commit and Push WASM Build
+      - name: Commit WASM build
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add dist/sed.js dist/sed.wasm
-
+          git add dist/busybox.js dist/busybox.wasm
           if git diff --staged --quiet; then
-            echo "No changes to WASM output"
-            exit 0
+            echo "No changes"
+          else
+            git commit -m "chore: build busybox wasm (sed enabled)"
+            git push
           fi
-
-          git commit -m "chore: rebuild GNU sed wasm"
-          git push
