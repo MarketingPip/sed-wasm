@@ -31,8 +31,8 @@ jobs:
           # 1. Create a base 'all no' config
           make allnoconfig
           
-          # 2. Append our requirements to the end of the file
-          # BusyBox will respect the last entry for a variable
+          # 2. Append our requirements. 
+          # Setting CONFIG_SHELL_IS_NONE=y specifically stops the shell choice menu.
           cat <<EOF >> .config
           CONFIG_SED=y
           CONFIG_STATIC=y
@@ -40,8 +40,9 @@ jobs:
           CONFIG_BASH_IS_NONE=y
           EOF
           
-          # 3. Non-interactive sync (much faster than 'yes n | make oldconfig')
-          make olddefconfig KCONFIG_NOTIMESTAMP=1
+          # 3. Use /dev/null to automatically accept all defaults for any unset symbols
+          # This is the standard "non-interactive" fallback when olddefconfig isn't available.
+          make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null
           
           # 4. Fix Emscripten header conflict
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
@@ -49,8 +50,8 @@ jobs:
       - name: Compile Objects
         working-directory: ./busybox-src
         run: |
-          # We only need the 'editors' and 'libbb' directories for sed
-          # Compiling just these subdirs is significantly faster than a full 'make'
+          # Targeted build is much faster. 
+          # We build the libraries directly to avoid the top-level 'main' logic.
           emmake make -j$(nproc) \
             CC=emcc \
             CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
