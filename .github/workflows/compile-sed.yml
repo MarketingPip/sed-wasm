@@ -34,10 +34,9 @@ jobs:
           cat >> .config << 'EOF'
           CONFIG_SED=y
           CONFIG_LFS=n
-          CONFIG_HUSH=n
-          CONFIG_ASH=n
           CONFIG_FEATURE_SHOW_USAGE=n
           CONFIG_STATIC=y
+          CONFIG_SH_IS_NONE=y
           EOF
           
           # FORCE-REMOVE ASH REFERENCES:
@@ -49,10 +48,9 @@ jobs:
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
           make oldconfig
 
-      - name: Compile Objects (Ignore Link Errors)
+      - name: Compile Objects
         working-directory: ./busybox-src
         run: |
-          # Build object archives while ignoring the final Linux-specific link failure
           emmake make -j$(nproc) \
             CC=emcc \
             CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
@@ -63,8 +61,7 @@ jobs:
         run: |
           mkdir -p ../dist
           
-          # -s ENVIRONMENT=web: Forces the glue code to use fetch() and 
-          # prevents it from looking for Node.js 'fs' modules.
+          # We use -s INVOKE_RUN=0 so it doesn't try to start a default applet on load
           emcc -O3 \
             applets/built-in.o \
             editors/lib.a \
@@ -74,14 +71,14 @@ jobs:
             -s MODULARIZE=1 \
             -s EXPORT_NAME=createBusyBox \
             -s ENVIRONMENT=web \
-            -s FORCE_FILESYSTEM=1 \
-             -s EXPORTED_FUNCTIONS='["_main", "_malloc", "_free"]' \
+            -s FILESYSTEM=1 \
+            -s EXPORTED_RUNTIME_METHODS='["FS", "callMain"]' \
+            -s EXPORTED_FUNCTIONS='["_main"]' \
             -s EXIT_RUNTIME=1 \
+            -s INVOKE_RUN=0 \
             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
             -s INITIAL_MEMORY=32MB \
             -s ALLOW_MEMORY_GROWTH=1
-
-
 
       - name: Commit and Push
         run: |
