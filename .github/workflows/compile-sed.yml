@@ -66,11 +66,6 @@ jobs:
         working-directory: ./busybox-src
         run: |
           mkdir -p ../dist
-          
-          # FIXES INCLUDED:
-          # 1. -s FILESYSTEM=1 & EXPORTED_RUNTIME_METHODS: enables Module.FS
-          # 2. -s ENVIRONMENT=web: prevents Node.js 'fs' detection errors
-          # 3. -s INVOKE_RUN=0: prevents auto-execution of non-existent shell
           emcc -O3 \
             applets/built-in.o \
             editors/lib.a \
@@ -82,9 +77,10 @@ jobs:
             -s ENVIRONMENT=web \
             -s FILESYSTEM=1 \
             -s EXPORTED_RUNTIME_METHODS='["FS", "callMain"]' \
-            -s EXPORTED_FUNCTIONS='["_main", "_malloc", "_free"]' \
+            -s EXPORTED_FUNCTIONS='["_main"]' \
             -s EXIT_RUNTIME=1 \
             -s INVOKE_RUN=0 \
+            -s ALLOW_TABLE_GROWTH=1 \
             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
             -s INITIAL_MEMORY=32MB \
             -s ALLOW_MEMORY_GROWTH=1
