@@ -1,62 +1,70 @@
 name: Build BusyBox (sed) to WebAssembly
+
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
 permissions:
   contents: write
+
 jobs:
   build-busybox:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
           version: latest
+
       - name: Download BusyBox
         run: |
           wget https://busybox.net/downloads/busybox-1.36.1.tar.bz2
           tar -xjf busybox-1.36.1.tar.bz2
           mv busybox-1.36.1 busybox-src
+
       - name: Configure BusyBox (Minimal Sed)
         working-directory: ./busybox-src
         run: |
           make allnoconfig
+
           cat >> .config << 'EOF'
           CONFIG_SED=y
           CONFIG_LFS=n
           CONFIG_HUSH=n
           CONFIG_ASH=n
-          CONFIG_SH_IS_NONE=y
-          CONFIG_FEATURE_SH_REPLY=n
           CONFIG_FEATURE_SHOW_USAGE=n
           CONFIG_STATIC=y
           EOF
 
-          # Patch headers to avoid size misdetection errors
-          sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
+          # FORCE-REMOVE ASH REFERENCES
+          sed -i 's/IF_ASH(APPLET(ash,.*)//' include/applets.h
+
+          # Patch header check
+          sed -i 's/char BUG_off_t_size_is_misdetected/\/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
 
           make oldconfig
 
-          # CRITICAL: patch the *generated* applet table AFTER oldconfig produces it.
-          # Patching applets.h (the template) has no effect — this is the real symbol table.
-          sed -i '/ash_main\|hush_main\|sh_main/d' include/applet_tables.h || true
-
-      - name: Compile Objects
+      - name: Compile Objects (Ignore Link Errors)
         working-directory: ./busybox-src
         run: |
           emmake make -j$(nproc) \
             CC=emcc \
             CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
             SKIP_STRIP=y || true
+
       - name: Manual Force-Link
         working-directory: ./busybox-src
         run: |
           mkdir -p ../dist
+
           emcc -O3 \
             applets/built-in.o \
+            editors/sed.o \
             editors/lib.a \
             libbb/lib.a \
             -o ../dist/busybox.js \
@@ -64,22 +72,23 @@ jobs:
             -s MODULARIZE=1 \
             -s EXPORT_NAME=createBusyBox \
             -s ENVIRONMENT=web \
-            -s FILESYSTEM=1 \
-            -s EXPORTED_RUNTIME_METHODS='["FS", "callMain"]' \
-            -s EXPORTED_FUNCTIONS='["_main", "_malloc", "_free"]' \
-            -s EXIT_RUNTIME=0 \
-            -s INVOKE_RUN=0 \
+            -s FORCE_FILESYSTEM=1 \
+            -s EXPORTED_FUNCTIONS='["_main","_malloc","_free"]' \
+            -s EXIT_RUNTIME=1 \
             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
-            -s INITIAL_MEMORY=33554432 \
+            -s INITIAL_MEMORY=32MB \
             -s ALLOW_MEMORY_GROWTH=1
+
       - name: Commit and Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f dist/busybox.js dist/busybox.wasm
+
+          git add dist/busybox.js dist/busybox.wasm
+
           if git diff --staged --quiet; then
             echo "No changes."
           else
-            git commit -m "chore: update compiled busybox-sed wasm (fix ash_main and FS errors)"
+            git commit -m "chore: update compiled busybox-sed wasm (browser-safe)"
             git push
           fi
