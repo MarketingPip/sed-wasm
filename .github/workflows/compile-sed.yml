@@ -2,6 +2,7 @@ name: Build BusyBox (sed) to WebAssembly
 
 on:
   push:
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -26,43 +27,48 @@ jobs:
           tar -xjf busybox-1.36.1.tar.bz2
           mv busybox-1.36.1 busybox-src
 
-      - name: Configure BusyBox for WASM
+      - name: Configure BusyBox (Minimal Sed)
         working-directory: ./busybox-src
         run: |
+          # 1. Start with no applets enabled
           make allnoconfig
           
-          # Force LFS off and enable sed
+          # 2. Enable ONLY sed and core requirements
           cat >> .config << 'EOF'
           CONFIG_SED=y
           CONFIG_LFS=n
-          CONFIG_FDISK_SUPPORT_LARGE_DISKS=n
+          CONFIG_HUSH=n
+          CONFIG_ASH=n
+          CONFIG_FEATURE_SH_REPLY=n
           CONFIG_FEATURE_SHOW_USAGE=n
           CONFIG_STATIC=y
           EOF
           
-          # Fix the 'BUG_off_t_size_is_misdetected' error by forcing the check to pass
-          # We're effectively commenting out the static assertion that's failing
+          # 3. Patch the 'off_t' size mismatch error in the headers
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
           
+          # 4. Apply the configuration
           make oldconfig
 
       - name: Build BusyBox with Emscripten
         working-directory: ./busybox-src
         run: |
-          # LDFLAGS handles the linking quirks
-          # SKIP_STRIP=y is required because emcc doesn't support the 'strip' command
+          # We ignore undefined symbols to bypass shell-specific signals (sigsuspend)
+          # We target busybox_unstripped to bypass the 'strip' utility failure
           emmake make -j$(nproc) \
             CC=emcc \
-            CFLAGS="-D_POSIX_C_SOURCE=200809L" \
+            CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
+            LDFLAGS="-s ERROR_ON_UNDEFINED_SYMBOLS=0" \
             SKIP_STRIP=y \
             busybox_unstripped
 
-      - name: Link to WebAssembly
+      - name: Link to WebAssembly Bundle
         working-directory: ./busybox-src
         run: |
           mkdir -p ../dist
           
-          # Link the unstripped object into the JS/Wasm bundle
+          # Final wrap into JS + WASM
+          # EXIT_RUNTIME=1 ensures the process cleans up after the command finishes
           emcc busybox_unstripped \
             -O3 \
             -s WASM=1 \
@@ -71,16 +77,21 @@ jobs:
             -s FORCE_FILESYSTEM=1 \
             -s EXPORTED_FUNCTIONS='["_main"]' \
             -s EXIT_RUNTIME=1 \
+            -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
             -o ../dist/busybox.js
 
-      - name: Commit WASM build
+      - name: Commit and Push WASM build
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Stage the artifacts
           git add dist/busybox.js dist/busybox.wasm
+          
+          # Only push if changes exist to avoid infinite loops/errors
           if git diff --staged --quiet; then
-            echo "No changes"
+            echo "No changes to binary."
           else
-            git commit -m "chore: build busybox wasm (sed enabled)"
+            git commit -m "chore: update compiled busybox-sed wasm"
             git push
           fi
