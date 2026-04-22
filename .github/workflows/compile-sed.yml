@@ -59,8 +59,6 @@ jobs:
         run: |
           mkdir -p ../dist
           
-          # We use find to catch the correct paths for the archives
-          # and link them. We don't need sed.o specifically if lib.a is present.
           emcc -O3 \
             applets/built-in.o \
             editors/lib.a \
@@ -70,8 +68,9 @@ jobs:
             -s MODULARIZE=1 \
             -s EXPORT_NAME=createBusyBox \
             -s ENVIRONMENT=web \
-            -s FORCE_FILESYSTEM=1 \
-            -s EXPORTED_FUNCTIONS='["_main", "_malloc", "_free"]' \
+            -s FILESYSTEM=1 \
+            -s EXPORTED_RUNTIME_METHODS='["FS", "callMain"]' \
+            -s EXPORTED_FUNCTIONS='["_main"]' \
             -s EXIT_RUNTIME=1 \
             -s INVOKE_RUN=0 \
             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
