@@ -67,7 +67,6 @@ jobs:
           # prevents it from looking for Node.js 'fs' modules.
           emcc -O3 \
             applets/built-in.o \
-            editors/sed.o \
             editors/lib.a \
             libbb/lib.a \
             -o ../dist/busybox.js \
@@ -81,6 +80,8 @@ jobs:
             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
             -s INITIAL_MEMORY=32MB \
             -s ALLOW_MEMORY_GROWTH=1
+
+
 
       - name: Commit and Push
         run: |
