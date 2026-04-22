@@ -1,0 +1,57 @@
+name: Compile GNU Sed to Wasm
+on: [push, workflow_dispatch]
+
+# Required to allow the Action to push code back to the repo
+permissions:
+  contents: write
+
+jobs:
+  build-sed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+
+      - name: Download GNU Sed Source
+        run: |
+          wget https://ftp.gnu.org/gnu/sed/sed-4.9.tar.xz
+          tar -xf sed-4.9.tar.xz
+          mv sed-4.9 sed-src
+
+      - name: Configure and Build
+        working-directory: ./sed-src
+        run: |
+          emconfigure ./configure --host=none-none-none --disable-nls
+          emmake make
+
+      - name: Link to Wasm
+        working-directory: ./sed-src
+        run: |
+          emcc sed/sed.o -o ../sed.js \
+            -O3 \
+            -s EXPORTED_FUNCTIONS='["_main"]' \
+            -s FORCE_FILESYSTEM=1 \
+            -s MODULARIZE=1 \
+            -s EXPORT_NAME='createSed' \
+            -s INVOKE_RUN=0
+
+      - name: Commit and Push Files
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add the generated files
+          git add sed.js sed.wasm
+          
+          # Only commit if there are changes to avoid workflow errors
+          if git diff --staged --quiet; then
+            echo "No changes to sed.js or sed.wasm"
+          else
+            git commit -m "chore: update compiled sed wasm binaries"
+            git push
+          fi
