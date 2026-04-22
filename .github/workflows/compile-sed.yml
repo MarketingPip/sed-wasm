@@ -28,30 +28,30 @@ jobs:
       - name: Configure BusyBox
         working-directory: ./busybox-src
         run: |
-          # 1. Create a base 'all no' config
+          # 1. Start with a total "no" config
           make allnoconfig
           
-          # 2. Append our requirements. 
-          # Setting CONFIG_SHELL_IS_NONE=y specifically stops the shell choice menu.
-          cat <<EOF >> .config
-          CONFIG_SED=y
-          CONFIG_STATIC=y
-          CONFIG_SH_IS_NONE=y
-          CONFIG_BASH_IS_NONE=y
-          EOF
+          # 2. Force the config to accept "None" for shells to avoid the choice menu
+          sed -i 's/# CONFIG_SH_IS_NONE is not set/CONFIG_SH_IS_NONE=y/' .config
+          sed -i 's/# CONFIG_BASH_IS_NONE is not set/CONFIG_BASH_IS_NONE=y/' .config
           
-          # 3. Use /dev/null to automatically accept all defaults for any unset symbols
-          # This is the standard "non-interactive" fallback when olddefconfig isn't available.
+          # 3. Enable SED and Static linking
+          # We use >> to ensure they are added if not present, and sed to flip them if they are
+          echo "CONFIG_SED=y" >> .config
+          echo "CONFIG_STATIC=y" >> .config
+          sed -i 's/.*CONFIG_SED.*/CONFIG_SED=y/' .config
+          sed -i 's/.*CONFIG_STATIC.*/CONFIG_STATIC=y/' .config
+          
+          # 4. Now run oldconfig - it will be silent because the 'choices' are already resolved
           make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null
           
-          # 4. Fix Emscripten header conflict
+          # 5. Emscripten header fix
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
 
       - name: Compile Objects
         working-directory: ./busybox-src
         run: |
-          # Targeted build is much faster. 
-          # We build the libraries directly to avoid the top-level 'main' logic.
+          # Build only the libraries needed for sed. This is very fast.
           emmake make -j$(nproc) \
             CC=emcc \
             CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
