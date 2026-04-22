@@ -45,7 +45,9 @@ jobs:
           EOF
           
           # Fix off_t size mismatch for WASM
-          sed -i 's/char BUG_off_t_size_is_misdetected/char IGNORED_BUG_off_t_size_is_misdetected/' include/libbb.h
+          sed -i \
+            's/char BUG_off_t_size_is_misdetected\[sizeof(off_t) == sizeof(uoff_t) ? 1 : -1\]/char BUG_off_t_size_is_misdetected[1]/' \
+            include/libbb.h
           make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null
 
       - name: Compile Objects
