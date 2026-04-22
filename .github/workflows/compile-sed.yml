@@ -27,9 +27,21 @@ jobs:
         working-directory: ./busybox-src
         run: |
           make allnoconfig
-          printf 'CONFIG_SED=y\nCONFIG_LFS=n\nCONFIG_HUSH=n\nCONFIG_ASH=n\nCONFIG_SH_IS_NONE=y\nCONFIG_FEATURE_SH_REPLY=n\nCONFIG_FEATURE_SHOW_USAGE=n\nCONFIG_STATIC=y\n' >> .config
+          # Set options directly — no heredoc, no printf, no append
+          # allnoconfig writes the full .config; we flip only what we need
+          sed -i 's/# CONFIG_SED is not set/CONFIG_SED=y/' .config
+          sed -i 's/CONFIG_ASH=y/CONFIG_ASH=n/' .config
+          sed -i 's/CONFIG_HUSH=y/CONFIG_HUSH=n/' .config
+          # Ensure entries exist even if allnoconfig omitted them entirely
+          grep -q 'CONFIG_SED' .config   || echo 'CONFIG_SED=y'   >> .config
+          grep -q 'CONFIG_ASH' .config   || echo 'CONFIG_ASH=n'   >> .config
+          grep -q 'CONFIG_HUSH' .config  || echo 'CONFIG_HUSH=n'  >> .config
+          grep -q 'CONFIG_STATIC' .config || echo 'CONFIG_STATIC=y' >> .config
+          sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
+          # Verify
+          echo "=== relevant config ===" && grep -E 'CONFIG_(SED|ASH|HUSH|STATIC)' .config
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
-          make oldconfig
+          make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null
 
       - name: Compile Objects
         working-directory: ./busybox-src
@@ -38,6 +50,9 @@ jobs:
             CC=emcc \
             CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
             SKIP_STRIP=y || true
+          echo "=== editors/lib.a ===" && ls -lh editors/lib.a || echo "MISSING editors/lib.a"
+          echo "=== sed_main presence ===" && nm editors/lib.a 2>/dev/null | grep sed_main || echo "sed_main NOT FOUND in editors/lib.a"
+          echo "=== editors objects ===" && ls editors/*.o 2>/dev/null || echo "no .o files in editors/"
 
       - name: Link to WebAssembly
         run: |
@@ -54,12 +69,13 @@ jobs:
             -s ENVIRONMENT=web \
             -s FORCE_FILESYSTEM=1 \
             -s EXPORTED_RUNTIME_METHODS='["FS","callMain"]' \
-            -s EXPORTED_FUNCTIONS='["_main","_malloc","_free"]' \
+            -s EXPORTED_FUNCTIONS='["_main","_malloc","_free","_sed_main"]' \
             -s EXIT_RUNTIME=0 \
             -s INVOKE_RUN=0 \
             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
             -s INITIAL_MEMORY=33554432 \
-            -s ALLOW_MEMORY_GROWTH=1
+            -s ALLOW_MEMORY_GROWTH=1 \
+            -Wl,--whole-archive busybox-src/editors/lib.a -Wl,--no-whole-archive
 
       - name: Commit and Push
         run: |
