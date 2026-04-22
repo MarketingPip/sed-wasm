@@ -28,69 +28,45 @@ jobs:
       - name: Configure BusyBox
         working-directory: ./busybox-src
         run: |
-          # 1. Clear everything
-          make clean
-          
-          # 2. Create the most basic seed possible
-          # We must use the exact internal names used by BusyBox
+          make allnoconfig
+          # Use a heredoc to force-write the config
           cat <<EOF > .config
           CONFIG_SED=y
+          CONFIG_FEATURE_SED_LONG_OPTIONS=y
           CONFIG_STATIC=y
           CONFIG_SH_IS_NONE=y
           CONFIG_BASH_IS_NONE=y
-          CONFIG_NO_USAGE_STRINGS=y
-          CONFIG_FEATURE_VERBOSE_USAGE=n
-          CONFIG_FEATURE_COMPRESS_USAGE=n
           EOF
-          
-          # 3. Use 'olddefconfig' - if it fails, fallback to 'allnoconfig' with the seed.
-          # We use 'yes n' as a tertiary shield.
-          make olddefconfig KCONFIG_NOTIMESTAMP=1 || yes n | make allnoconfig KCONFIG_ALLCONFIG=.config
-          
-          # 4. Fix Emscripten header conflict
+          make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
 
       - name: Compile Objects
         working-directory: ./busybox-src
         run: |
-          # Only build what sed needs. This bypasses the interactive 'main' build logic.
-          emmake make -j$(nproc) \
-            CC=emcc \
-            CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
-            SKIP_STRIP=y \
-            editors/lib.a libbb/lib.a
+          # Build only the specific object files
+          emmake make -j$(nproc) CC=emcc editors/sed.o libbb/verror_msg.o libbb/xfuncs_printf.o libbb/last_char_is.o libbb/copy_common.o libbb/get_last_path_component.o
+          # Also build the rest of libbb just in case sed needs more helpers
+          emmake make -j$(nproc) CC=emcc libbb/lib.a editors/lib.a
 
       - name: Link to WebAssembly
         run: |
-          # 1. Check what the actual symbol name is inside the archive
-          # It might be 'sed_main' or it might have a prefix depending on the config
-          ACTUAL_SED_SYMBOL=$(nm busybox-src/editors/lib.a | grep -i 'T .*sed_main' | awk '{print $3}' | head -n 1)
-          echo "Detected sed symbol: $ACTUAL_SED_SYMBOL"
-          
-          if [ -z "$ACTUAL_SED_SYMBOL" ]; then
-            echo "Error: Could not find sed_main symbol in editors/lib.a"
-            exit 1
-          fi
-
-          # 2. Create the wrapper using the detected symbol
+          # Create the wrapper
           cat <<EOF > wasm_main.c
           const char *applet_name = "sed";
-          extern int $ACTUAL_SED_SYMBOL(int argc, char **argv);
+          extern int sed_main(int argc, char **argv);
           int main(int argc, char **argv) {
-              return $ACTUAL_SED_SYMBOL(argc, argv);
+              return sed_main(argc, argv);
           }
           EOF
 
-          # 3. Prepare the trimmed library
-          cp busybox-src/libbb/lib.a libbb_trimmed.a
-          ar d libbb_trimmed.a appletlib.o
-          
           mkdir -p dist
           
-          # 4. Link - we add -ldl because BusyBox utility functions often expect it
+          # Link using the object files directly + the archives as fallback
+          # This ensures sed_main is visible to the linker
           emcc -O2 \
             wasm_main.c \
-            -Wl,--whole-archive busybox-src/editors/lib.a libbb_trimmed.a -Wl,--no-whole-archive \
+            busybox-src/editors/sed.o \
+            -Wl,--whole-archive busybox-src/libbb/lib.a -Wl,--no-whole-archive \
             -o dist/busybox.js \
             -s WASM=1 \
             -s MODULARIZE=1 \
@@ -101,8 +77,7 @@ jobs:
             -s EXIT_RUNTIME=0 \
             -s INVOKE_RUN=0 \
             -s INITIAL_MEMORY=33554432 \
-            -s ALLOW_MEMORY_GROWTH=1 \
-            -ldl
+            -s ALLOW_MEMORY_GROWTH=1
 
       - name: Commit and Push
         run: |
