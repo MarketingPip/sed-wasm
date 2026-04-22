@@ -1,4 +1,4 @@
-name: Build pure sed WebAssembly (no BusyBox)
+name: Build micro-sed WebAssembly (no autotools)
 
 on:
   push:
@@ -21,44 +21,31 @@ jobs:
         with:
           version: latest
 
-      - name: Download GNU sed
+      - name: Download GNU sed source
         run: |
           wget https://ftp.gnu.org/gnu/sed/sed-4.9.tar.xz
           tar -xf sed-4.9.tar.xz
           mv sed-4.9 sed-src
 
-      - name: Configure minimal build
+      - name: Install minimal build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make gcc
+
+      - name: Build sed WITHOUT configure (clean compilation)
         working-directory: ./sed-src
         run: |
-          emconfigure ./configure \
-            --host=wasm32-unknown-emscripten \
-            --disable-nls \
-            --disable-threads \
-            --disable-shared \
-            --enable-static \
-            ac_cv_func_nanosleep=yes \
-            gl_cv_func_nanosleep_standard=yes \
-            ac_cv_func_alarm=no \
-            gl_cv_func_sleep_works=yes \
-            ac_cv_header_netinet_in_h=no \
-            ac_cv_func_inet_pton=no \
-            ac_cv_func_strerror_r=yes \
-            ac_cv_have_decl_alarm=no \
-            ac_cv_func_working_mktime=yes
+          # Force clean state
+          rm -rf config.status config.cache autom4te.cache
 
-      - name: Build sed to WASM (minimal runtime)
-        working-directory: ./sed-src
-        run: |
-          emmake make -j$(nproc) CFLAGS="-O3"
+          # We DO NOT run ./configure at all
 
-      - name: Link to WebAssembly (correct target)
-        working-directory: ./sed-src
-        run: |
-          mkdir -p ../dist
-
-          emcc sed/sed \
-            -O3 \
-            -o ../dist/sed.js \
+          # Compile only required sed sources directly
+          emcc -O3 \
+            -I. -Isrc \
+            sed/*.c \
+            lib/*.c \
+            -o sed.js \
             -s WASM=1 \
             -s MODULARIZE=1 \
             -s EXPORT_NAME=createSed \
@@ -67,15 +54,21 @@ jobs:
             -s EXIT_RUNTIME=1 \
             -s ALLOW_MEMORY_GROWTH=1 \
             -s INITIAL_MEMORY=16MB \
-            -s EXPORTED_RUNTIME_METHODS='["callMain"]' \
+            -s EXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
             -s ERROR_ON_UNDEFINED_SYMBOLS=1
 
-      - name: Commit output
+      - name: Move output
+        run: |
+          mkdir -p dist
+          mv sed-src/sed.js dist/sed.js
+          mv sed-src/sed.wasm dist/sed.wasm
+
+      - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add -f dist/sed.js dist/sed.wasm
 
-          git commit -m "build: pure sed wasm (no busybox, no FS layer)" || true
+          git commit -m "build: micro-sed wasm (no autotools, no configure)" || true
           git push || true
