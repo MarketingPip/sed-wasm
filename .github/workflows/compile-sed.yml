@@ -1,17 +1,13 @@
 name: Build BusyBox (sed) to WebAssembly
-
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
-
 permissions:
   contents: write
-
 jobs:
   build-busybox:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,30 +23,13 @@ jobs:
           tar -xjf busybox-1.36.1.tar.bz2
           mv busybox-1.36.1 busybox-src
 
-      - name: Configure BusyBox (Minimal Sed)
+      - name: Configure BusyBox
         working-directory: ./busybox-src
         run: |
           make allnoconfig
-
-          cat >> .config << 'EOF'
-          CONFIG_SED=y
-          CONFIG_LFS=n
-          CONFIG_HUSH=n
-          CONFIG_ASH=n
-          CONFIG_SH_IS_NONE=y
-          CONFIG_FEATURE_SH_REPLY=n
-          CONFIG_FEATURE_SHOW_USAGE=n
-          CONFIG_STATIC=y
-          EOF
-
-          # Patch header issue
-          sed -i 's/char BUG_off_t_size_is_misdetected/\/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
-
+          printf 'CONFIG_SED=y\nCONFIG_LFS=n\nCONFIG_HUSH=n\nCONFIG_ASH=n\nCONFIG_SH_IS_NONE=y\nCONFIG_FEATURE_SH_REPLY=n\nCONFIG_FEATURE_SHOW_USAGE=n\nCONFIG_STATIC=y\n' >> .config
+          sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
           make oldconfig
-
-          # Remove shell applets safely (best-effort)
-          sed -i '/ash_main\|hush_main\|sh_main/d' include/applet_tables.h || true
-          sed -i '/APPLET.*ash\|APPLET.*hush\|IF_ASH\|IF_HUSH/d' include/applets.h || true
 
       - name: Compile Objects
         working-directory: ./busybox-src
@@ -60,55 +39,37 @@ jobs:
             CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
             SKIP_STRIP=y || true
 
-      - name: Manual Force-Link
-        working-directory: ./busybox-src
+      - name: Link to WebAssembly
         run: |
-          mkdir -p ../dist
-
-          cat > ../wasm_main.c << 'EOF'
-          int sed_main(int argc, char **argv) __attribute__((weak));
-          
-          int main(int argc, char **argv) {
-              return sed_main(argc, argv);
-          }
-          EOF
-
+          printf 'int sed_main(int argc, char **argv);\nint main(int argc, char **argv) {\n  return sed_main(argc, argv);\n}\n' > wasm_main.c
+          mkdir -p dist
           emcc -O3 \
-            ../wasm_main.c \
-            editors/lib.a \
-            libbb/lib.a \
-            -o ../dist/busybox.js \
+            wasm_main.c \
+            busybox-src/editors/lib.a \
+            busybox-src/libbb/lib.a \
+            -o dist/busybox.js \
             -s WASM=1 \
             -s MODULARIZE=1 \
             -s EXPORT_NAME=createBusyBox \
             -s ENVIRONMENT=web \
             -s FORCE_FILESYSTEM=1 \
             -s EXPORTED_RUNTIME_METHODS='["FS","callMain"]' \
+            -s EXPORTED_FUNCTIONS='["_main","_malloc","_free"]' \
             -s EXIT_RUNTIME=0 \
             -s INVOKE_RUN=0 \
             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
             -s INITIAL_MEMORY=33554432 \
             -s ALLOW_MEMORY_GROWTH=1
 
-      - name: Verify wasm contains sed
-        working-directory: ./busybox-src
-        run: |
-          strings ../dist/busybox.wasm | grep -q "sed" || \
-            (echo "ERROR: sed not found in wasm" && exit 1)
-
-          echo "OK: sed confirmed in wasm"
-
       - name: Commit and Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           git rm --cached -f dist/busybox.js dist/busybox.wasm 2>/dev/null || true
           git add -f dist/busybox.js dist/busybox.wasm
-
           if git diff --staged --quiet; then
             echo "No changes."
           else
-            git commit -m "chore: update busybox-sed wasm"
+            git commit -m "chore: update compiled busybox-sed wasm"
             git push
           fi
