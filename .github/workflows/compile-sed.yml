@@ -40,6 +40,11 @@ jobs:
           CONFIG_STATIC=y
           EOF
           
+          # FORCE-REMOVE ASH REFERENCES:
+          # This prevents the "missing ash_main" error by ensuring the applet 
+          # table doesn't even try to reference a shell.
+          sed -i 's/IF_ASH(APPLET(ash,.*)/\/* ash removed *\//' include/applets.h
+          
           # Patch headers to avoid size checks
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
           make oldconfig
@@ -62,6 +67,7 @@ jobs:
           # prevents it from looking for Node.js 'fs' modules.
           emcc -O3 \
             applets/built-in.o \
+            editors/sed.o \
             editors/lib.a \
             libbb/lib.a \
             -o ../dist/busybox.js \
@@ -70,7 +76,7 @@ jobs:
             -s EXPORT_NAME=createBusyBox \
             -s ENVIRONMENT=web \
             -s FORCE_FILESYSTEM=1 \
-            -s EXPORTED_FUNCTIONS='["_main"]' \
+             -s EXPORTED_FUNCTIONS='["_main", "_malloc", "_free"]' \
             -s EXIT_RUNTIME=1 \
             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
             -s INITIAL_MEMORY=32MB \
