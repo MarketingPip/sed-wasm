@@ -1,21 +1,32 @@
-name: Compile GNU Sed to Wasm
-on: [push, workflow_dispatch]
+name: Compile GNU Sed to WebAssembly
 
-# Required to allow the Action to push code back to the repo
+on:
+  push:
+  workflow_dispatch:
+
 permissions:
   contents: write
 
 jobs:
   build-sed:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      # Cache Emscripten SDK to avoid reinstall every run
+      - name: Cache Emscripten
+        uses: actions/cache@v4
+        with:
+          path: ~/.emsdk
+          key: emsdk-latest
 
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
           version: latest
+          actions-cache-folder: emsdk-cache
 
       - name: Download GNU Sed Source
         run: |
@@ -23,46 +34,69 @@ jobs:
           tar -xf sed-4.9.tar.xz
           mv sed-4.9 sed-src
 
-      - name: Configure and Build
+      # Critical: ensure config.guess exists and is modern enough
+      - name: Fix Autotools Host Detection
         working-directory: ./sed-src
         run: |
-          # We provide "cached" answers to the tests that cause hangs
-          emconfigure ./configure \
-            --host=none-none-none \
+          wget -O config.guess 'https://git.savannah.gnu.org/cgit/config.git/plain/config.guess'
+          chmod +x config.guess
+
+      - name: Configure (WASM-safe)
+        working-directory: ./sed-src
+        run: |
+          export CONFIG_SITE=/dev/null
+
+          emconfigure env CONFIG_SITE=/dev/null ./configure \
+            --host=wasm32-unknown-emscripten \
+            --build=$(./config.guess) \
             --disable-nls \
             --disable-threads \
+            --disable-shared \
+            --disable-rpath \
+            --cache-file=config.cache \
             ac_cv_func_nanosleep=yes \
-            gl_cv_func_nanosleep_standard=yes \
+            ac_cv_func_sleep=yes \
             ac_cv_func_alarm=no \
-            gl_cv_func_sleep_works=yes \
-            ac_cv_header_netinet_in_h=no \
-            ac_cv_func_inet_pton=no
+            ac_cv_func_inet_pton=no \
+            ac_cv_prog_cc_c99=yes \
+            gl_cv_func_nanosleep_standard=yes \
+            gl_cv_func_sleep_works=yes
 
-          emmake make
-
-      - name: Link to Wasm
+      - name: Build
         working-directory: ./sed-src
         run: |
-          emcc sed/sed.o -o ../sed.js \
-            -O3 \
-            -s EXPORTED_FUNCTIONS='["_main"]' \
-            -s FORCE_FILESYSTEM=1 \
-            -s MODULARIZE=1 \
-            -s EXPORT_NAME='createSed' \
-            -s INVOKE_RUN=0
+          emmake make -j1
 
-      - name: Commit and Push Files
+      - name: Link to WebAssembly
+        working-directory: ./sed-src
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Add the generated files
-          git add sed.js sed.wasm
-          
-          # Only commit if there are changes to avoid workflow errors
+          mkdir -p ../dist
+
+          emcc sed/sed.o \
+            -O3 \
+            -s WASM=1 \
+            -s MODULARIZE=1 \
+            -s EXPORT_NAME=createSed \
+            -s INVOKE_RUN=0 \
+            -s FORCE_FILESYSTEM=1 \
+            -s EXPORTED_FUNCTIONS='["_main"]' \
+            -o ../dist/sed.js
+
+      - name: Verify Output
+        run: |
+          ls -lah dist
+
+      - name: Commit and Push WASM Build
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add dist/sed.js dist/sed.wasm
+
           if git diff --staged --quiet; then
-            echo "No changes to sed.js or sed.wasm"
-          else
-            git commit -m "chore: update compiled sed wasm binaries"
-            git push
+            echo "No changes to WASM output"
+            exit 0
           fi
+
+          git commit -m "chore: rebuild GNU sed wasm"
+          git push
