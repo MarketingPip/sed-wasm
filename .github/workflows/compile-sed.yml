@@ -57,11 +57,14 @@ jobs:
       - name: Link to WebAssembly
         run: |
           printf 'int sed_main(int argc, char **argv);\nint main(int argc, char **argv) {\n  return sed_main(argc, argv);\n}\n' > wasm_main.c
+          # Remove appletlib.o from libbb — it defines its own main() which conflicts
+          cp busybox-src/libbb/lib.a libbb_trimmed.a
+          ar d libbb_trimmed.a appletlib.o
           mkdir -p dist
-          emcc -O3 \
+          emcc -O2 \
             wasm_main.c \
             busybox-src/editors/lib.a \
-            busybox-src/libbb/lib.a \
+            libbb_trimmed.a \
             -o dist/busybox.js \
             -s WASM=1 \
             -s MODULARIZE=1 \
@@ -74,8 +77,7 @@ jobs:
             -s INVOKE_RUN=0 \
             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
             -s INITIAL_MEMORY=33554432 \
-            -s ALLOW_MEMORY_GROWTH=1 \
-            -Wl,--whole-archive busybox-src/editors/lib.a -Wl,--no-whole-archive
+            -s ALLOW_MEMORY_GROWTH=1
 
       - name: Commit and Push
         run: |
