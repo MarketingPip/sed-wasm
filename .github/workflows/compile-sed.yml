@@ -28,25 +28,31 @@ jobs:
       - name: Configure BusyBox
         working-directory: ./busybox-src
         run: |
+          # 1. Start with a clean, 'all-no' config
           make allnoconfig
-          # Use a heredoc to force-write the config
-          cat <<EOF > .config
-          CONFIG_SED=y
-          CONFIG_FEATURE_SED_LONG_OPTIONS=y
-          CONFIG_STATIC=y
-          CONFIG_SH_IS_NONE=y
-          CONFIG_BASH_IS_NONE=y
-          EOF
-          make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null
+          
+          # 2. Force-enable SED and its dependencies directly in the .config file
+          # We use -i to replace the 'not set' lines with 'y'
+          sed -i 's/# CONFIG_SED is not set/CONFIG_SED=y/' .config
+          sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
+          sed -i 's/# CONFIG_FEATURE_SED_LONG_OPTIONS is not set/CONFIG_FEATURE_SED_LONG_OPTIONS=y/' .config
+          
+          # 3. Ensure shell choices are set to 'none' to avoid the choice menu
+          sed -i 's/CONFIG_SH_IS_ASH=y/CONFIG_SH_IS_NONE=y/' .config || echo "CONFIG_SH_IS_NONE=y" >> .config
+          sed -i 's/CONFIG_BASH_IS_ASH=y/CONFIG_BASH_IS_NONE=y/' .config || echo "CONFIG_BASH_IS_NONE=y" >> .config
+
+          # 4. Finalize the config without asking questions
+          # Using oldconfig with /dev/null fallback
+          make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null || true
+          
+          # 5. Emscripten header fix
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
 
       - name: Compile Objects
         working-directory: ./busybox-src
         run: |
-          # Build only the specific object files
-          emmake make -j$(nproc) CC=emcc editors/sed.o libbb/verror_msg.o libbb/xfuncs_printf.o libbb/last_char_is.o libbb/copy_common.o libbb/get_last_path_component.o
-          # Also build the rest of libbb just in case sed needs more helpers
-          emmake make -j$(nproc) CC=emcc libbb/lib.a editors/lib.a
+          # We explicitly build the .o file for sed to ensure it exists
+          emmake make -j$(nproc) CC=emcc editors/sed.o libbb/lib.a
 
       - name: Link to WebAssembly
         run: |
@@ -61,8 +67,7 @@ jobs:
 
           mkdir -p dist
           
-          # Link using the object files directly + the archives as fallback
-          # This ensures sed_main is visible to the linker
+          # Link: wrapper + sed.o + the whole libbb archive
           emcc -O2 \
             wasm_main.c \
             busybox-src/editors/sed.o \
