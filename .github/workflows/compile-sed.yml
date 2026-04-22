@@ -26,15 +26,15 @@ jobs:
       - name: Configure and Build
         working-directory: ./sed-src
         run: |
-          # gl_cv_func_nanosleep_standard=yes tells it nanosleep is fine
-          # --disable-threads removes the need for complex locking checks
-          # --without-selinux prevents hunting for security libraries
+          # We provide "cached" answers to the tests that cause hangs
           emconfigure ./configure \
             --host=none-none-none \
             --disable-nls \
             --disable-threads \
-            --without-selinux \
+            ac_cv_func_nanosleep=yes \
             gl_cv_func_nanosleep_standard=yes \
+            ac_cv_func_alarm=no \
+            gl_cv_func_sleep_works=yes \
             ac_cv_header_netinet_in_h=no \
             ac_cv_func_inet_pton=no
 
