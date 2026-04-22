@@ -34,15 +34,17 @@ jobs:
           cat >> .config << 'EOF'
           CONFIG_SED=y
           CONFIG_LFS=n
-          CONFIG_HUSH=n
-          CONFIG_ASH=n
-          CONFIG_SH_IS_NONE=y
-          CONFIG_FEATURE_SH_REPLY=n
           CONFIG_FEATURE_SHOW_USAGE=n
           CONFIG_STATIC=y
+          CONFIG_SH_IS_NONE=y
           EOF
           
-          # Patch headers
+          # FORCE-REMOVE ASH REFERENCES:
+          # This prevents the "missing ash_main" error by ensuring the applet 
+          # table doesn't even try to reference a shell.
+          sed -i 's/IF_ASH(APPLET(ash,.*)/\/* ash removed *\//' include/applets.h
+          
+          # Patch headers to avoid size checks
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
           make oldconfig
 
@@ -59,6 +61,7 @@ jobs:
         run: |
           mkdir -p ../dist
           
+          # We use -s INVOKE_RUN=0 so it doesn't try to start a default applet on load
           emcc -O3 \
             applets/built-in.o \
             editors/lib.a \
