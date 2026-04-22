@@ -3,8 +3,10 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
 permissions:
   contents: write
+
 jobs:
   build-busybox:
     runs-on: ubuntu-latest
@@ -27,36 +29,29 @@ jobs:
         working-directory: ./busybox-src
         run: |
           make allnoconfig
-          # Set options directly — no heredoc, no printf, no append
-          # allnoconfig writes the full .config; we flip only what we need
-          sed -i 's/# CONFIG_SED is not set/CONFIG_SED=y/' .config
-          sed -i 's/CONFIG_ASH=y/CONFIG_ASH=n/' .config
-          sed -i 's/CONFIG_HUSH=y/CONFIG_HUSH=n/' .config
-          # Ensure entries exist even if allnoconfig omitted them entirely
-          grep -q 'CONFIG_SED' .config   || echo 'CONFIG_SED=y'   >> .config
-          grep -q 'CONFIG_ASH' .config   || echo 'CONFIG_ASH=n'   >> .config
-          grep -q 'CONFIG_HUSH' .config  || echo 'CONFIG_HUSH=n'  >> .config
-          grep -q 'CONFIG_STATIC' .config || echo 'CONFIG_STATIC=y' >> .config
-          sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
-          # Verify
-          echo "=== relevant config ===" && grep -E 'CONFIG_(SED|ASH|HUSH|STATIC)' .config
+          # Use BusyBox's own config script for reliability
+          ./scripts/config --enable CONFIG_SED
+          ./scripts/config --enable CONFIG_STATIC
+          ./scripts/config --disable CONFIG_ASH
+          ./scripts/config --disable CONFIG_HUSH
+          
+          # Fix for Emscripten's long/off_t checks
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
+          
           make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null
 
       - name: Compile Objects
         working-directory: ./busybox-src
         run: |
+          # Build only the necessary libraries
           emmake make -j$(nproc) \
             CC=emcc \
             CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
             SKIP_STRIP=y || true
-          echo "=== editors/lib.a ===" && ls -lh editors/lib.a || echo "MISSING editors/lib.a"
-          echo "=== sed_main presence ===" && nm editors/lib.a 2>/dev/null | grep sed_main || echo "sed_main NOT FOUND in editors/lib.a"
-          echo "=== editors objects ===" && ls editors/*.o 2>/dev/null || echo "no .o files in editors/"
 
       - name: Link to WebAssembly
         run: |
-          # Define the missing applet_name and the wrapper main
+          # 1. Create a wrapper that defines the missing applet_name symbol
           cat <<EOF > wasm_main.c
           const char *applet_name = "sed";
           int sed_main(int argc, char **argv);
@@ -65,15 +60,16 @@ jobs:
           }
           EOF
 
-          # Remove appletlib.o from libbb — it defines its own main() which conflicts
+          # 2. Trim appletlib.o to avoid duplicate 'main' symbols
           cp busybox-src/libbb/lib.a libbb_trimmed.a
           ar d libbb_trimmed.a appletlib.o
           
           mkdir -p dist
+          
+          # 3. Link with --whole-archive to prevent "missing function" errors at runtime
           emcc -O2 \
             wasm_main.c \
-            busybox-src/editors/lib.a \
-            libbb_trimmed.a \
+            -Wl,--whole-archive busybox-src/editors/lib.a libbb_trimmed.a -Wl,--no-whole-archive \
             -o dist/busybox.js \
             -s WASM=1 \
             -s MODULARIZE=1 \
@@ -81,10 +77,9 @@ jobs:
             -s ENVIRONMENT=web \
             -s FORCE_FILESYSTEM=1 \
             -s EXPORTED_RUNTIME_METHODS='["FS","callMain"]' \
-            -s EXPORTED_FUNCTIONS='["_main","_malloc","_free","_sed_main"]' \
+            -s EXPORTED_FUNCTIONS='["_main","_malloc","_free"]' \
             -s EXIT_RUNTIME=0 \
             -s INVOKE_RUN=0 \
-            -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
             -s INITIAL_MEMORY=33554432 \
             -s ALLOW_MEMORY_GROWTH=1
 
@@ -92,7 +87,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git rm --cached -f dist/busybox.js dist/busybox.wasm 2>/dev/null || true
           git add -f dist/busybox.js dist/busybox.wasm
           if git diff --staged --quiet; then
             echo "No changes."
