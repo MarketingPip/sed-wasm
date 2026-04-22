@@ -28,30 +28,32 @@ jobs:
       - name: Configure BusyBox
         working-directory: ./busybox-src
         run: |
-          # 1. Start with a total "no" config
-          make allnoconfig
+          # 1. Clear everything
+          make clean
           
-          # 2. Force the config to accept "None" for shells to avoid the choice menu
-          sed -i 's/# CONFIG_SH_IS_NONE is not set/CONFIG_SH_IS_NONE=y/' .config
-          sed -i 's/# CONFIG_BASH_IS_NONE is not set/CONFIG_BASH_IS_NONE=y/' .config
+          # 2. Create the most basic seed possible
+          # We must use the exact internal names used by BusyBox
+          cat <<EOF > .config
+          CONFIG_SED=y
+          CONFIG_STATIC=y
+          CONFIG_SH_IS_NONE=y
+          CONFIG_BASH_IS_NONE=y
+          CONFIG_NO_USAGE_STRINGS=y
+          CONFIG_FEATURE_VERBOSE_USAGE=n
+          CONFIG_FEATURE_COMPRESS_USAGE=n
+          EOF
           
-          # 3. Enable SED and Static linking
-          # We use >> to ensure they are added if not present, and sed to flip them if they are
-          echo "CONFIG_SED=y" >> .config
-          echo "CONFIG_STATIC=y" >> .config
-          sed -i 's/.*CONFIG_SED.*/CONFIG_SED=y/' .config
-          sed -i 's/.*CONFIG_STATIC.*/CONFIG_STATIC=y/' .config
+          # 3. Use 'olddefconfig' - if it fails, fallback to 'allnoconfig' with the seed.
+          # We use 'yes n' as a tertiary shield.
+          make olddefconfig KCONFIG_NOTIMESTAMP=1 || yes n | make allnoconfig KCONFIG_ALLCONFIG=.config
           
-          # 4. Now run oldconfig - it will be silent because the 'choices' are already resolved
-          make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null
-          
-          # 5. Emscripten header fix
+          # 4. Fix Emscripten header conflict
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
 
       - name: Compile Objects
         working-directory: ./busybox-src
         run: |
-          # Build only the libraries needed for sed. This is very fast.
+          # Only build what sed needs. This bypasses the interactive 'main' build logic.
           emmake make -j$(nproc) \
             CC=emcc \
             CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
@@ -60,7 +62,7 @@ jobs:
 
       - name: Link to WebAssembly
         run: |
-          # 1. Provide the missing symbol and a clean entry point
+          # Define the missing applet_name symbol and the main wrapper
           cat <<EOF > wasm_main.c
           const char *applet_name = "sed";
           int sed_main(int argc, char **argv);
@@ -69,13 +71,13 @@ jobs:
           }
           EOF
 
-          # 2. Prepare the library without the conflicting appletlib.o
+          # Remove appletlib.o from libbb — it defines its own main() which conflicts
           cp busybox-src/libbb/lib.a libbb_trimmed.a
           ar d libbb_trimmed.a appletlib.o
           
           mkdir -p dist
           
-          # 3. Link with --whole-archive to ensure all internal dependencies are included
+          # Link with --whole-archive to ensure all internal libbb helpers are included
           emcc -O2 \
             wasm_main.c \
             -Wl,--whole-archive busybox-src/editors/lib.a libbb_trimmed.a -Wl,--no-whole-archive \
@@ -86,7 +88,6 @@ jobs:
             -s ENVIRONMENT=web \
             -s FORCE_FILESYSTEM=1 \
             -s EXPORTED_RUNTIME_METHODS='["FS","callMain"]' \
-            -s EXPORTED_FUNCTIONS='["_main","_malloc","_free"]' \
             -s EXIT_RUNTIME=0 \
             -s INVOKE_RUN=0 \
             -s INITIAL_MEMORY=33554432 \
