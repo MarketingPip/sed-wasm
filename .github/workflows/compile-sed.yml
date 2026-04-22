@@ -31,10 +31,20 @@ jobs:
         working-directory: ./sed-src
         run: |
           emconfigure ./configure \
+            --host=wasm32-unknown-emscripten \
             --disable-nls \
-            --disable-dependency-tracking \
-            --without-included-regex \
-            --prefix=/usr
+            --disable-threads \
+            --disable-shared \
+            --enable-static \
+            ac_cv_func_nanosleep=yes \
+            gl_cv_func_nanosleep_standard=yes \
+            ac_cv_func_alarm=no \
+            gl_cv_func_sleep_works=yes \
+            ac_cv_header_netinet_in_h=no \
+            ac_cv_func_inet_pton=no \
+            ac_cv_func_strerror_r=yes \
+            ac_cv_have_decl_alarm=no \
+            ac_cv_func_working_mktime=yes
 
       - name: Build sed to WASM (minimal runtime)
         working-directory: ./sed-src
