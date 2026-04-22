@@ -21,53 +21,94 @@ jobs:
         with:
           version: latest
 
-      - name: Download BusyBox
+      - name: Add emgcc compatibility alias
+        shell: bash
         run: |
+          set -euxo pipefail
+          EMCC_BIN="$(command -v emcc)"
+          EMSCRIPTEN_DIR="$(dirname "$EMCC_BIN")"
+          ln -sf "$EMCC_BIN" "$EMSCRIPTEN_DIR/emgcc"
+          ln -sf "$(command -v em++)" "$EMSCRIPTEN_DIR/emg++"
+          ln -sf "$(command -v emar)" "$EMSCRIPTEN_DIR/emar"
+          ln -sf "$(command -v emranlib)" "$EMSCRIPTEN_DIR/emranlib"
+          echo "$EMSCRIPTEN_DIR" >> "$GITHUB_PATH"
+
+      - name: Download BusyBox
+        shell: bash
+        run: |
+          set -euxo pipefail
           curl -L -o busybox.tar.bz2 https://busybox.net/downloads/busybox-1.36.1.tar.bz2
           tar -xjf busybox.tar.bz2
           mv busybox-1.36.1 busybox-src
 
-      - name: Configure BusyBox for sed
+      - name: Configure BusyBox for sed only
+        shell: bash
         working-directory: ./busybox-src
         run: |
+          set -euxo pipefail
           make allnoconfig
           cat >> .config <<'EOF'
           CONFIG_HAVE_DOT_CONFIG=y
           CONFIG_SED=y
           CONFIG_FEATURE_SED_GNU_EXTENSIONS=y
-          CONFIG_FEATURE_SED_EGREP_ALIAS=n
-          CONFIG_LFS=y
+          CONFIG_LFS=n
           CONFIG_STATIC=n
           EOF
           yes "" | make oldconfig
 
-      - name: Build BusyBox with Emscripten (fixed)
+      - name: Build BusyBox with Emscripten
+        shell: bash
         working-directory: ./busybox-src
         run: |
-          export CC=emcc
-          export CXX=em++
+          set -euxo pipefail
+          export CC=emgcc
+          export CXX=emg++
+          export LD=emgcc
           export AR=emar
           export RANLIB=emranlib
-          export LD=emcc
+
           emmake make -j"$(nproc)" busybox \
             CFLAGS="-O3" \
-            LDFLAGS="-s WASM=1 -s MODULARIZE=1 -s EXPORT_NAME=createBusyBox -s ENVIRONMENT=web -s FORCE_FILESYSTEM=1 -s ALLOW_MEMORY_GROWTH=1"
+            LDFLAGS="-s WASM=1 -s MODULARIZE=1 -s EXPORT_NAME=createBusyBox -s ENVIRONMENT=web -s FORCE_FILESYSTEM=1 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ERROR_ON_UNDEFINED_SYMBOLS=0"
 
       - name: Package browser artifacts
+        shell: bash
         working-directory: ./busybox-src
         run: |
+          set -euxo pipefail
           mkdir -p ../dist
-          cp busybox.js ../dist/sed.js
-          cp busybox.wasm ../dist/sed.wasm
 
-      - name: Commit and Push
+          if [ -f busybox.js ]; then
+            cp busybox.js ../dist/sed.js
+          elif [ -f busybox ]; then
+            cp busybox ../dist/sed.js
+          else
+            echo "No JS output found."
+            find . -maxdepth 2 -name 'busybox*' -type f -print
+            exit 1
+          fi
+
+          if [ -f busybox.wasm ]; then
+            cp busybox.wasm ../dist/sed.wasm
+          else
+            echo "No WASM output found."
+            find . -maxdepth 2 -name '*.wasm' -type f -print
+            exit 1
+          fi
+
+      - name: Commit output
+        shell: bash
         run: |
+          set -euxo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dist/sed.js dist/sed.wasm
-          if git diff --staged --quiet; then
+
+          git add -f dist/sed.js dist/sed.wasm
+
+          if git diff --cached --quiet; then
             echo "No changes."
-          else
-            git commit -m "chore: update browser sed wasm"
-            git push
+            exit 0
           fi
+
+          git commit -m "build: busybox sed wasm"
+          git push
