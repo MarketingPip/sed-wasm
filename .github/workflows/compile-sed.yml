@@ -1,4 +1,4 @@
-name: Build micro-sed WebAssembly (no autotools)
+name: Build BusyBox sed to WebAssembly
 
 on:
   push:
@@ -21,54 +21,48 @@ jobs:
         with:
           version: latest
 
-      - name: Download GNU sed source
+      - name: Download BusyBox
         run: |
-          wget https://ftp.gnu.org/gnu/sed/sed-4.9.tar.xz
-          tar -xf sed-4.9.tar.xz
-          mv sed-4.9 sed-src
+          curl -L -o busybox.tar.bz2 https://busybox.net/downloads/busybox-1.36.1.tar.bz2
+          tar -xjf busybox.tar.bz2
+          mv busybox-1.36.1 busybox-src
 
-      - name: Install minimal build dependencies
+      - name: Configure BusyBox for sed
+        working-directory: ./busybox-src
         run: |
-          sudo apt-get update
-          sudo apt-get install -y make gcc
+          make allnoconfig
+          cat >> .config <<'EOF'
+          CONFIG_HAVE_DOT_CONFIG=y
+          CONFIG_SED=y
+          CONFIG_FEATURE_SED_GNU_EXTENSIONS=y
+          CONFIG_FEATURE_SED_EGREP_ALIAS=n
+          CONFIG_LFS=y
+          CONFIG_STATIC=n
+          EOF
+          yes "" | make oldconfig
 
-      - name: Build sed WITHOUT configure (clean compilation)
-        working-directory: ./sed-src
+      - name: Build BusyBox with Emscripten
+        working-directory: ./busybox-src
         run: |
-          # Force clean state
-          rm -rf config.status config.cache autom4te.cache
+          emmake make -j"$(nproc)" busybox \
+            CFLAGS="-O3 -s WASM=1 -s ENVIRONMENT=web -s ALLOW_MEMORY_GROWTH=1" \
+            LDFLAGS="-s MODULARIZE=1 -s EXPORT_NAME=createBusyBox -s ENVIRONMENT=web -s FORCE_FILESYSTEM=1 -s ALLOW_MEMORY_GROWTH=1"
 
-          # We DO NOT run ./configure at all
-
-          # Compile only required sed sources directly
-          emcc -O3 \
-            -I. -Isrc \
-            sed/*.c \
-            lib/*.c \
-            -o sed.js \
-            -s WASM=1 \
-            -s MODULARIZE=1 \
-            -s EXPORT_NAME=createSed \
-            -s ENVIRONMENT=web \
-            -s INVOKE_RUN=0 \
-            -s EXIT_RUNTIME=1 \
-            -s ALLOW_MEMORY_GROWTH=1 \
-            -s INITIAL_MEMORY=16MB \
-            -s EXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
-            -s ERROR_ON_UNDEFINED_SYMBOLS=1
-
-      - name: Move output
+      - name: Package browser artifacts
+        working-directory: ./busybox-src
         run: |
-          mkdir -p dist
-          mv sed-src/sed.js dist/sed.js
-          mv sed-src/sed.wasm dist/sed.wasm
+          mkdir -p ../dist
+          cp busybox.js ../dist/sed.js
+          cp busybox.wasm ../dist/sed.wasm
 
-      - name: Commit and push
+      - name: Commit and Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add -f dist/sed.js dist/sed.wasm
-
-          git commit -m "build: micro-sed wasm (no autotools, no configure)" || true
-          git push || true
+          git add dist/sed.js dist/sed.wasm
+          if git diff --staged --quiet; then
+            echo "No changes."
+          else
+            git commit -m "chore: update browser sed wasm"
+            git push
+          fi
