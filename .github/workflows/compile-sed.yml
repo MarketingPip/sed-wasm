@@ -51,12 +51,12 @@ jobs:
         run: |
           emmake make -j$(nproc) CFLAGS="-O3"
 
-      - name: Link to WebAssembly (NO FS BACKEND)
+      - name: Link to WebAssembly (correct target)
         working-directory: ./sed-src
         run: |
           mkdir -p ../dist
 
-          emcc sed/sed.o \
+          emcc sed/sed \
             -O3 \
             -o ../dist/sed.js \
             -s WASM=1 \
