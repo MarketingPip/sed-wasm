@@ -28,33 +28,27 @@ jobs:
       - name: Configure BusyBox
         working-directory: ./busybox-src
         run: |
-          # 1. Start with a clean slate
+          # Create a minimal config
           make allnoconfig
           
-          # 2. Ensure scripts/config is executable
-          chmod +x scripts/config
+          # Manually force-set the required variables in the .config file
+          # This bypasses the need for the scripts/config script
+          sed -i 's/.*CONFIG_SED.*/CONFIG_SED=y/' .config
+          sed -i 's/.*CONFIG_STATIC.*/CONFIG_STATIC=y/' .config
           
-          # 3. Enable SED and required plumbing
-          ./scripts/config --enable CONFIG_SED
-          ./scripts/config --enable CONFIG_STATIC
+          # Explicitly set shell choices to 'none' to stop interactive prompts
+          echo "CONFIG_SH_IS_NONE=y" >> .config
+          echo "CONFIG_BASH_IS_NONE=y" >> .config
           
-          # 4. Explicitly disable shells to prevent interactive choice prompts
-          ./scripts/config --disable CONFIG_ASH
-          ./scripts/config --disable CONFIG_HUSH
-          ./scripts/config --set-val CONFIG_SH_IS_NONE y
-          ./scripts/config --set-val CONFIG_BASH_IS_NONE y
-          
-          # 5. Apply the changes non-interactively
-          # oldconfig will take our script changes and fill in defaults for the rest
-          make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null
-          
-          # 6. Emscripten-specific header fix
+          # Fix for Emscripten-specific header conflict
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
+          
+          # Use 'yes n' to pipe 'no' to any remaining questions and keep it non-interactive
+          yes n | make oldconfig KCONFIG_NOTIMESTAMP=1
 
       - name: Compile Objects
         working-directory: ./busybox-src
         run: |
-          # Build only the necessary libraries
           emmake make -j$(nproc) \
             CC=emcc \
             CFLAGS="-D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=32" \
@@ -62,7 +56,7 @@ jobs:
 
       - name: Link to WebAssembly
         run: |
-          # 1. Create a wrapper that defines the missing applet_name symbol
+          # 1. Provide the missing symbol and a clean entry point
           cat <<EOF > wasm_main.c
           const char *applet_name = "sed";
           int sed_main(int argc, char **argv);
@@ -71,13 +65,13 @@ jobs:
           }
           EOF
 
-          # 2. Trim appletlib.o to avoid duplicate 'main' symbols
+          # 2. Prepare the library without the conflicting appletlib.o
           cp busybox-src/libbb/lib.a libbb_trimmed.a
           ar d libbb_trimmed.a appletlib.o
           
           mkdir -p dist
           
-          # 3. Link with --whole-archive to prevent "missing function" errors at runtime
+          # 3. Link with --whole-archive to ensure all internal dependencies are included
           emcc -O2 \
             wasm_main.c \
             -Wl,--whole-archive busybox-src/editors/lib.a libbb_trimmed.a -Wl,--no-whole-archive \
