@@ -28,35 +28,33 @@ jobs:
       - name: Configure BusyBox
         working-directory: ./busybox-src
         run: |
-          # 1. Start with a clean, 'all-no' config
-          make allnoconfig
-          
-          # 2. Force-enable SED and its dependencies directly in the .config file
-          # We use -i to replace the 'not set' lines with 'y'
-          sed -i 's/# CONFIG_SED is not set/CONFIG_SED=y/' .config
-          sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
-          sed -i 's/# CONFIG_FEATURE_SED_LONG_OPTIONS is not set/CONFIG_FEATURE_SED_LONG_OPTIONS=y/' .config
-          
-          # 3. Ensure shell choices are set to 'none' to avoid the choice menu
-          sed -i 's/CONFIG_SH_IS_ASH=y/CONFIG_SH_IS_NONE=y/' .config || echo "CONFIG_SH_IS_NONE=y" >> .config
-          sed -i 's/CONFIG_BASH_IS_ASH=y/CONFIG_BASH_IS_NONE=y/' .config || echo "CONFIG_BASH_IS_NONE=y" >> .config
+          # 1. Create a seed file to answer the mandatory "choice" questions
+          cat <<EOF > ci_config.seed
+          CONFIG_SED=y
+          CONFIG_STATIC=y
+          CONFIG_SH_IS_NONE=y
+          CONFIG_BASH_IS_NONE=y
+          EOF
 
-          # 4. Finalize the config without asking questions
-          # Using oldconfig with /dev/null fallback
-          make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null || true
+          # 2. Apply allnoconfig WITH the seed. 
+          # This sets everything to 'n' EXCEPT our seed values.
+          make allnoconfig KCONFIG_ALLCONFIG=ci_config.seed
           
-          # 5. Emscripten header fix
+          # 3. Finalize without interaction
+          make oldconfig KCONFIG_NOTIMESTAMP=1 < /dev/null
+
+          # 4. Fix Emscripten header conflict
           sed -i 's/char BUG_off_t_size_is_misdetected/ \/\/ char BUG_off_t_size_is_misdetected/' include/libbb.h
 
       - name: Compile Objects
         working-directory: ./busybox-src
         run: |
-          # We explicitly build the .o file for sed to ensure it exists
+          # Build only the objects we need. This is fast and ignores top-level failures.
           emmake make -j$(nproc) CC=emcc editors/sed.o libbb/lib.a
 
       - name: Link to WebAssembly
         run: |
-          # Create the wrapper
+          # 1. Create the wrapper defining the entry point and applet name
           cat <<EOF > wasm_main.c
           const char *applet_name = "sed";
           extern int sed_main(int argc, char **argv);
@@ -67,7 +65,8 @@ jobs:
 
           mkdir -p dist
           
-          # Link: wrapper + sed.o + the whole libbb archive
+          # 2. Link using the .o file directly to ensure sed_main is found
+          # We use --whole-archive for libbb to satisfy all internal dependencies
           emcc -O2 \
             wasm_main.c \
             busybox-src/editors/sed.o \
